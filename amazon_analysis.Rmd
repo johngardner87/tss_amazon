@@ -1,0 +1,209 @@
+---
+title: "amazon_analysis"
+author: "John Gardner"
+date: "7/30/2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+
+
+library(stringr)
+library(tidyverse)
+library(feather)
+library(magrittr)
+library(purrr)
+library(data.table)
+library(readr)
+library(lubridate)
+library(modeest)
+library(modes)
+library(sf)
+library(viridis)
+
+knitr::opts_chunk$set(echo = TRUE)
+
+```
+
+
+```{r sum}
+sword_sa <- st_read("D:/GIS/SWORD/SWORD_SA.shp") %>%
+    mutate(reach_id = as.numeric(as.character(reach_id)))
+
+tss_sum <- sr_tss %>%
+  group_by(reach_ID) %>%
+  summarise_at(vars(tss), list(mean=mean, median=median, sd=sd, count=length )) %>%
+  ungroup()
+
+# annual summary stats for each reach
+tss_sum_dry <- sr_tss %>%
+  mutate(season = ifelse(month >=6 & month <=11, "dry", "rainy")) %>%
+  filter(season=="dry") %>%
+  group_by(reach_ID, year) %>%
+  mutate(count_dry_year = n()) %>%
+  filter(count_dry_year >=4) %>%
+  summarise_at(vars(tss), list(mean=mean, median=median, sd=sd, count=length )) %>%
+  ungroup() %>%
+  group_by(reach_ID) %>%
+  mutate(year_count = n()) %>%
+  ungroup()
+
+# annual summary stats for each reach
+tss_sum_year <- sr_tss %>%
+  group_by(reach_ID, year) %>%
+  mutate(count_year = n()) %>%
+  filter(count_year >=6) %>%
+  summarise_at(vars(tss), list(mean=mean, median=median, sd=sd, count=length )) %>%
+  ungroup() %>%
+  group_by(reach_ID) %>%
+  mutate(year_count = n()) %>%
+  ungroup()
+
+# trend test for annual mean ndssi at each reach
+tss_trend_dry <- tss_sum_dry %>%
+  filter(year_count >= 15) %>%
+  group_by(reach_ID) %>%
+  nest() %>%
+  mutate(t = map2(data, "mean", mk_name)) %>%
+  unnest(t) %>%
+  dplyr::select(-data) %>%
+  mutate(p_0.5 = ifelse(p_mean < 0.05, "sig", "not")) %>%
+  mutate(trend = case_when(
+    tau_mean > 0 & p_0.5 =="sig" ~"increase",
+    tau_mean < 0 & p_0.5 =="sig" ~ "decrease",
+    TRUE ~ "none"
+  )) %>%
+  ungroup()
+  
+##
+tss_trend <- tss_sum_year %>%
+  filter(year_count >= 15) %>%
+  group_by(reach_ID) %>%
+  nest() %>%
+  mutate(t = map2(data, "mean", mk_name)) %>%
+  unnest(t) %>%
+  dplyr::select(-data) %>%
+  mutate(p_0.5 = ifelse(p_mean < 0.05, "sig", "not")) %>%
+  mutate(trend = case_when(
+    tau_mean > 0 & p_0.5 =="sig" ~"increase",
+    tau_mean < 0 & p_0.5 =="sig" ~ "decrease",
+    TRUE ~ "none"
+  )) %>%
+  ungroup()
+
+write_csv(tss_sum, "out/tss_summary_v1.1.csv")
+
+write_csv(tss_sum_year, "out/tss_annual_summary_v1.1.csv")
+write_csv(tss_sum_dry, "out/tss_annual_summary_dryseason_v1.1.csv")
+
+write_csv(tss_trend_dry, "out/tss_trends_dryseason_v1.1.csv")
+write_csv(tss_trend, "out/tss_trends_annual_v1.1.csv")
+
+tss_trend %>%
+  group_by(trend) %>%
+  summarise(n=n()) %>%
+  mutate(p = n/sum(n))
+
+tss_trend_dry %>%
+  group_by(trend) %>%
+  summarise(n=n()) %>%
+  mutate(p = n/sum(n))
+
+
+trend_map <- sword_sa %>%
+  mutate(reach_d = as.character(reach_d)) %>%
+  inner_join(tss_trend  %>%
+               mutate(reach_ID = as.character(reach_ID)) %>%
+               filter(trend %in% c("increase", "decrease")),
+             by = c("reach_d" = "reach_ID"))
+
+library(mapview)
+
+mapview(trend_map, zcol="trend")
+
+
+```
+
+```{r ndssi}
+
+# long term summary stats
+ndssi_sum <- sr_clean_all %>%
+  group_by(reach_ID) %>%
+  summarise_at(vars(ndssi), list(mean=mean, median=median, sd=sd, count=length )) %>%
+  ungroup()
+
+# annual summary stats for each reach
+ndssi_sum_year <- sr_clean_all %>%
+  mutate(season = ifelse(month >=6 & month <=11, "dry", "rainy")) %>%
+  filter(season=="dry") %>%
+  group_by(reach_ID, year) %>%
+  mutate(count_dry_year = n()) %>%
+  filter(count_dry_year >=4) %>%
+  summarise_at(vars(ndssi), list(mean=mean, median=median, sd=sd, count=length )) %>%
+  ungroup() %>%
+  group_by(reach_ID) %>%
+  mutate(year_count = n()) %>%
+  ungroup()
+
+# trend test for annual mean ndssi at each reacgh
+ndssi_trend <-ndssi_sum_year %>%
+  filter(year_count >= 15) %>%
+  group_by(reach_ID) %>%
+  nest() %>%
+  mutate(t = map2(data, "mean", mk_name)) %>%
+  unnest(t) %>%
+  dplyr::select(-data) %>%
+  mutate(p_0.5 = ifelse(p_mean < 0.05, "sig", "not")) %>%
+  mutate(trend = case_when(
+    tau_mean > 0 & p_0.5 =="sig" ~"increase",
+    tau_mean < 0 & p_0.5 =="sig" ~ "decrease",
+    TRUE ~ "none"
+  )) %>%
+  ungroup()
+  
+
+
+write_csv(ndssi_sum, "out/ndssi_summary.csv")
+
+write_csv(ndssi_sum_year, "out/ndssi_annual_summary.csv")
+
+write_csv(ndssi_trend, "out/ndssi_trends.csv")
+
+
+ndssi_trend %>%
+  group_by(trend) %>%
+  summarise(n=n()) %>%
+  mutate(p = n/sum(n))
+
+```
+
+
+
+```{r ndssi_plot, echo=FALSE}
+
+###
+ggplot()+
+  geom_point(data=sr_clean_all %>% 
+               filter(reach_ID %in% unique(ndssi_sum$reach_ID)[500:510]),
+             aes(x=date, y=ndssi)) +
+  facet_wrap(~reach_ID, scales="free")
+
+ggplot()+
+  geom_point(data=ndssi_sum_year %>% 
+               #filter(reach_ID==62221200261),
+               filter(reach_ID %in% unique(ndssi_sum$reach_ID)[500:510]),
+             aes(x=year, y=mean)) +
+  facet_wrap(~reach_ID, scales="free")
+
+###
+
+map_sum <- sword_sa %>%
+  mutate(reach_id = as.numeric(reach_id)) %>%
+  inner_join(ndssi_sum, by=c("reach_id"="reach_ID"))
+
+
+ggplot()+
+  geom_sf(data=map_sum, aes(color=median)) +
+  scale_color_viridis_c()
+
+```
