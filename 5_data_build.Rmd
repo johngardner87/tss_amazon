@@ -1,0 +1,108 @@
+---
+title: "data_build"
+author: "John Gardner"
+date: "3/26/2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+
+library(stringr)
+library(tidyverse)
+library(feather)
+library(magrittr)
+library(purrr)
+library(data.table)
+library(readr)
+library(lubridate)
+library(modeest)
+library(modes)
+library(useful)
+
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+```{r build}
+### Create a cleaned surface reflectance database with band corrections, calculation of >60 band combinations, and water color, brightness, saturation, etc.
+
+# path to GEE surface reflectance (SR) pulls for each river each
+path<- "D:/GoogleDrive/AmazonSR"
+
+# load functions
+source("D:/Dropbox/projects/tss_amazon/functions.R")
+
+# read in and merge SR pull
+sr <- list.files(path=path, pattern=".csv", full.names = T) %>%
+  map_df(~ fread(., stringsAsFactors = F))
+
+# apply function for cleaning data
+sr_clean <- pull_clean(sr)
+
+# calculate empirical band correction coefficients for LS5 and LS8
+correction_coef <- ls_correction(sr_clean)
+
+# write correction coefficients to file
+#write_csv(correction_coef, "D:/Dropbox/projects/tss_amazon/out/ls_correction_coef.csv")
+
+# filter poly coeficients with 1-99 % quantiles
+correction_coef_99 <- correction_coef %>%
+  filter(fit %in% c(NA, "98_quant")) %>%
+  dplyr::select(-fit)
+
+# Apply correction coefficients. Don't run, this takes too long, ~1.5 hr
+sr_clean <- sr_clean %>%
+  mutate(rn = row_number()) %>%
+  mutate(sat = as.character(sat)) %>%
+  pivot_longer(cols = c("red", "green", "blue", "nir", "swir1", "swir2", "TIR1"), names_to="band") %>%
+  group_by(band, sat) %>%
+  left_join(correction_coef_99, by=c("band", "sat")) %>%
+  mutate(value_cor=  coef2*value^ 2 + coef1*value + intercept) %>%
+  ungroup() %>%
+  mutate(value_cor = ifelse(value_cor <=0, value, value_cor)) %>%
+  dplyr::select(-intercept, -coef1, -coef2) %>%
+  pivot_wider(names_from = band,
+              values_from = c("value", "value_cor"))  %>%
+    rename_at(vars(starts_with("value_")),
+           function(x) stringr::str_replace_all(x, "value_", "")) %>%
+    rename_at(vars(red, green, blue, nir, swir1, swir2, TIR1),function(x) paste0(x,"_raw")) %>%
+    rename_at(vars(starts_with("cor")),            funs(stringr::str_replace_all(., "cor_", ""))) %>%
+  relocate(date, year, month, reach_ID, sat, pathrow, path, row, aerosol, blue, green, red, nir, swir1, swir2, TIR1, TIR2, blue_raw, green_raw, red_raw, nir_raw, swir1_raw, swir2_raw, TIR1_raw, sd_NirSD, count, clouds, CLOUD_COVER, SOLAR_ZENITH_ANGLE, SOLAR_AZIMUTH_ANGLE, pCount_dswe1, pCount_dswe3, pCount_shadow, hillshadow, dswe, pixel_qa, LS_ID, max_year, min_year, n_years, rn)
+  
+
+# apply function for transforming data, calculating color and band metics
+sr_clean_all <- pull_transform(sr_clean, RGB=F, maxRGB=10000) 
+
+# write data
+write_feather(sr_clean_all, "D:/Dropbox/projects/tss_amazon/out/sr_amazon_v1.feather")
+
+write_csv(sr_clean_all, "D:/Dropbox/projects/tss_amazon/out/sr_amazon_v1.txt")
+
+```
+
+## Including Plots
+
+You can also embed plots, for example:
+
+```{r pressure, echo=FALSE}
+poly_78 <- read_csv("D:/Dropbox/projects/tss_amazon/out/ls_78_quantile_correction.csv")
+
+poly_57 <- read_csv("D:/Dropbox/projects/tss_amazon/out/ls_57_quantile_correction.csv")
+
+ggplot(poly_78 %>% filter(quant >0.1 & quant <0.99)) +
+  geom_point( aes(x=value_8, y= value_7))+
+  geom_point( aes(x=pred, y= value_7), color="blue", alpha=0.5)+
+  geom_abline(aes(slope=1, intercept=0)) +
+  facet_wrap(~band, scales="free") 
+
+ggplot(poly_57 %>% filter(quant >0.1 & quant <0.99)) +
+  geom_point( aes(x=value_5, y= value_7))+
+  geom_point( aes(x=pred, y= value_7), color="blue", alpha=0.5)+
+  geom_abline(aes(slope=1, intercept=0)) +
+  facet_wrap(~band, scales="free") 
+
+
+
+```
+
+Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.

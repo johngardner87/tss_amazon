@@ -1,0 +1,155 @@
+---
+title: "post_matchup"
+author: "John Gardner"
+date: "6/24/2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+library(stringr)
+library(tidyverse)
+library(feather)
+library(magrittr)
+library(purrr)
+library(data.table)
+library(readr)
+library(lubridate)
+library(modeest)
+library(furrr) 
+library(modes)
+library(useful)
+library(anytime)
+
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+
+```{r cars}
+
+# load and combine data
+# path to GEE surface reflectance (SR) pulls for each river each
+path<- "D:/GoogleDrive/matchup_amazon"
+
+# load functions
+source("D:/Dropbox/projects/tss_amazon/functions.R")
+
+# read in and merge SR pull
+sr_match <- list.files(path=path, pattern=".csv", full.names = T) %>%
+  map_df(~ fread(., stringsAsFactors = F))
+
+# apply function for cleaning data
+sr_match_clean <- pull_clean_match(sr_match)
+
+correction_coef<- read_csv("D:/Dropbox/projects/tss_amazon/out/ls_correction_coef.csv")
+
+# filter poly coeficients with 1-99 % quantiles
+correction_coef_99 <- correction_coef %>%
+  filter(fit %in% c(NA, "98_quant")) %>%
+  dplyr::select(-fit)
+
+
+# calculate empirical band correction coefficients for LS5 and LS8
+sr_match_clean2 <- sr_match_clean %>%
+ # slice_sample(., n=500) %>%
+  mutate(rn = row_number()) %>%
+  mutate(sat = as.character(sat)) %>%
+  pivot_longer(cols = c("red", "green", "blue", "nir", "swir1", "swir2", "TIR1"), names_to="band") %>%
+  group_by(band, sat) %>%
+  left_join(correction_coef_99, by=c("band", "sat")) %>%
+  mutate(value_cor=  coef2*value^ 2 + coef1*value + intercept) %>%
+  ungroup() %>%
+  mutate(value_cor = ifelse(value_cor <=0, value, value_cor)) %>%
+  dplyr::select(-intercept, -coef1, -coef2) %>%
+  pivot_wider(names_from = band,
+              values_from = c("value", "value_cor"))  %>%
+    rename_at(vars(starts_with("value_")),
+           function(x) stringr::str_replace_all(x, "value_", "")) %>%
+    rename_at(vars(red, green, blue, nir, swir1, swir2, TIR1),function(x) paste0(x,"_raw")) %>%
+    rename_at(vars(starts_with("cor")),            funs(stringr::str_replace_all(., "cor_", ""))) %>%
+  relocate(date, year, month, siteID, sat, pathrow, path, row, aerosol, blue, green, red, nir, swir1, swir2, TIR1, TIR2, blue_raw, green_raw, red_raw, nir_raw, swir1_raw, swir2_raw, TIR1_raw, sd_NirSD, clouds, CLOUD_COVER, SOLAR_ZENITH_ANGLE, SOLAR_AZIMUTH_ANGLE, pCount_dswe1, pCount_dswe3, pCount_shadow, hillshadow, dswe, pixel_qa, LS_ID, rn)
+  
+# apply function for transforming data, calculating color and band metics
+sr_match_all <- pull_transform(sr_match_clean2, RGB=F, maxRGB=10000) 
+
+# write data
+write_feather(sr_match_all, "D:/Dropbox/projects/tss_amazon/out/sr_matchup_full.feather")
+
+
+```
+
+## Including Plots
+
+You can also embed plots, for example:
+
+```{r pressure, echo=FALSE}
+
+# find which ones are match-up with in-situ dates
+library(lutz)
+library(sf)
+
+hidro <- read_csv("D:/Dropbox/projects/tss_amazon/in/HidrowebCombine_Corrected.csv")
+
+hybam <- read_csv("D:/Dropbox/projects/tss_amazon/in/HybamCombine.csv")
+
+sites_tz <- sites_out %>%
+  mutate(tzid = tz_lookup(., crs=4326, method="fast" ))
+
+
+combine <- bind_rows(hidro, hybam) %>%
+  left_join(sites_tz %>%
+              dplyr::select(siteID, tzid), by="siteID") %>%
+  mutate(date_time = mdy_hms(paste(date, as.character(time), sep=" "))) %>%
+  mutate(date_utc = force_tzs(date_time,tzid,tzone_out='UTC')) %>%
+  mutate(date = mdy(date))
+
+
+
+#######
+
+pull.same <- inner_join(combine, sr_match_all %>%
+                          rename(date_time_LS = time,
+                                 date_LS= date),
+                        by=c('siteID', "date"="date_LS")) 
+
+#Shoulder the data by 1 day and make sure that sites where sequential samples occur only 
+#keep the same day sampling
+pull.plus1 <- combine %>%
+  mutate(date = date + 1) %>%
+  inner_join(sr_match_all %>%
+               rename(date_time_LS = time,
+                      date_LS= date),
+             by=c('siteID', "date"="date_LS"))
+
+
+#Shoulder the data by -1 day
+pull.minus1 <- combine %>%
+  mutate(date = date - 1) %>%
+  anti_join(pull.same, by=c('siteID','date')) %>%
+  inner_join(sr_match_all %>%
+               rename(date_time_LS = time,
+                      date_LS=date),
+             by=c('siteID', "date"="date_LS")) 
+
+#Bind all this data together
+matchups <- bind_rows(pull.same, pull.plus1, pull.minus1) %>%
+  select(-rn, -time, -geometry, -date) %>%
+  mutate(timediff_hrs= as.numeric(date_utc - date_time_LS)/(60*60)) %>%
+  arrange(siteID, date_utc) %>%
+  mutate(rn = row_number()) %>%
+  relocate(rn, siteID, date_time, date_utc, date_time_LS, timediff_hrs, year, month, tzid, latitude:origine ,tss, sat:LS_ID, NR:hue_angle) %>%
+  rename(dt_local = date_time, dt_utc=date_utc, dt_landsat = date_time_LS) %>%
+  filter(!is.na(tss), tss >0)
+
+#write_feather(matchups, "D:/Dropbox/projects/tss_amazon/out/amazon_matchups_v1.feather")
+#write_csv(matchups, "D:/Dropbox/projects/tss_amazon/out/amazon_matchups_v1.csv")
+
+ggplot(matchups) +
+  geom_point(aes(x=bright, y=tss, color=abs(timediff_hrs))) +
+  scale_color_viridis_c() +
+  scale_y_log10()
+
+
+```
+
+Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.
