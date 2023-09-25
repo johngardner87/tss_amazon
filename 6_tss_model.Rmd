@@ -29,12 +29,8 @@ library(CAST)
 library(future)
 library(maptools)
 
-#library(knitr)
-#library(randomForest)
-#library(onehot)
-#library(rnaturalearth)
-#library(rnaturalearthdata)
-# library(dataRetrieval)
+library(rnaturalearth)
+library(rnaturalearthdata)
 #library(tmap)
 knitr::opts_chunk$set(echo = TRUE)
 ```
@@ -45,9 +41,7 @@ knitr::opts_chunk$set(echo = TRUE)
 iter<- "v1.1"
 matchups <- read_csv('out/amazon_matchups_v1.csv')
 
-ggplot(matchups)+
-  geom_point(aes(x=red, y=tss)) +
-  scale_y_log10()
+remove <- tibble(rn = c(2,	4,	8,	12,	14,	21,	22,	32,	33,	35,	37,	40,	42,	43,	45,	47,	53,	59,	67,	71,	73,	74,	75,	83,	112,	117,	118,	127,	131,	140,	152,	154,	155,	156,	157,	160,	165,	183,	184,	185,	191,	194,	195,	206,	207,	220,	225,	237,	238,	239,	240,	252,	278,	284,	285,	286,	331,	334,	335,	336,	337,	339,	355,	367,	376,	383,	384,	388,	397,	422,	434,	439,	440,	445,	448,	450,	457,	458,	459,	466,	471,	472,	475,	477,	478,	480,	482,	493,	494,	495,	499,	511,	536,	556,	613,	614,	615,	618,	633,	634,	639,	700,	701,	706,	716,	734,	747,	768,	777,	778,	787,	793,	795,	798,	800,	801,	811,	832,	833,	834,	835,	839,	842,	850,	851,	881,	908,	912,	913,	918,	919,	938,	939,	943,	946,	955,	967,	971,	986,	1010,	1013,	1017,	1018,	1068,	1084,	1108,	1115,	1121,	1123,	1124,	1125,	1126,	1127,	1132,	1133,	1134,	1136,	1137,	1138,	1139,	1141,	1142,	1143,	1144,	1146,	1147,	1148,	1149,	1150,	1151,	1152,	1153,	1154,	1156,	1159,	1161,	1162,	1163,	1164,	1167,	1168,	1169,	1171,	1173,	1174,	1176,	1177,	1178,	1180,	1183,	1184,	1186,	1187,	1188,	1191,	1194,	1197,	1200,	1201,	1202,	1203,	1204,	1205,	1207,	1208,	1211,	1212,	1213,	1214,	1219,	1221,	1222,	1224,	1225,	1226,	1228,	1235,	1242,	1248,	1249,	1250,	1254,	1266,	1273,	1274,	1275,	1278,	1282,	1287,	1288,	1290,	1295,	1297,	1298,	1299,	1301,	1308,	1309,	1316,	1322,	1334,	1335,	1336,	1337,	1341,	1343,	1348,	1354,	1355,	1356,	1358))
 
 # split data representatively across time, space, concentration for train/validation
 holdout <- function(x) {
@@ -88,7 +82,7 @@ df <- matchups %>%
   filter(!is.na(tss)) %>%
   filter(tss < 7500 & tss >=0.01) %>%
   filter(tss != 1)  %>%
-  filter(!rn %in% outlier_sum$uniqueID) %>%
+  filter(!rn %in% remove$rn) %>%
   mutate(lat_group = cut_number(latitude, 2, right= F),
          long_group = cut_number(longitude, 2, right=F),
          date = as.Date(dt_utc),
@@ -140,9 +134,7 @@ ggplot() +
     plot.background = element_blank(),
     legend.text = element_text(size=9))
 
-
-#ggsave("D:/Dropbox/projects/riverTSS/figs/Amazon_sampling_density.png", width=4, height=6, units="in", dpi=300)
-
+#ggsave("figs/Amazon_sampling_density.png", width=5, height=6, units="in", dpi=300)
 
 ```
 
@@ -320,11 +312,9 @@ output <- tibble(Predicted = pred, Actual = actual, uniqueID = uniqueID) %>%
          obs = ifelse(abs(residual) > quantile(abs(residual), .975, na.rm=T), "bad", "good")) 
 
 ### save all training data
-#write_feather(train, path ='D:/Dropbox/projects/tss_amazon/out/train_20220101.feather'))
 #write_csv(train, 'out/train_full_v1.1.csv')
 
 ### save just features and response variable that are used
-#write_feather(train %>% select(value, features_1), path = paste0('D:/Dropbox/projects/riverTSS/4_model/out/train_clean_',iter, '.feather'))
 #write_csv(train %>% select(tss, features_1), path ='out/train_v1.1.csv')
 
 ### save output of validation model
